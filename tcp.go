@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
@@ -12,6 +14,40 @@ import (
 
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 )
+
+const (
+	CRLF    = "\n\r"
+	FD_GATE = "xxx.com"
+)
+
+func initWsProtocolSwitch(conn net.Conn) error {
+	pSwitchReq := "GET / HTTP/1.1\n"
+	pSwitchReq += fmt.Sprintf("Host: %s\n", FD_GATE)
+	pSwitchReq += "Sec-WebSocket-Version: 13\n"
+	pSwitchReq += fmt.Sprintf(
+		"Sec-WebSocket-Key: %s\n",
+		base64.StdEncoding.EncodeToString([]byte(FD_GATE)),
+	)
+	pSwitchReq += "Connection: Upgrade\n"
+	pSwitchReq += "Upgrade: websocket\n"
+	pSwitchReq += (CRLF + CRLF)
+
+	n, err := conn.Write([]byte(pSwitchReq))
+	if err != nil {
+		return err
+	}
+
+	if n != len(pSwitchReq) {
+		return fmt.Errorf("protocol switch request failed")
+	}
+
+	buf := make([]byte, 256)
+	_, err = conn.Read(buf)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
 // Create a SOCKS server listening on addr and proxy to server.
 func socksLocal(addr, server string, shadow func(net.Conn) net.Conn) {
@@ -72,6 +108,10 @@ func tcpLocal(addr, server string, shadow func(net.Conn) net.Conn, getAddr func(
 			if err != nil {
 				logf("failed to connect to server %v: %v", server, err)
 				return
+			}
+			err = initWsProtocolSwitch(rc)
+			if err != nil {
+				logf("Websocket protocol switch failed: %v", err)
 			}
 			defer rc.Close()
 			if config.TCPCork {
